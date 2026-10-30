@@ -71,6 +71,10 @@ struct Output {
 struct Parameters {
     int beam_width = 10;
     int beam_depth = 10;
+
+    double time_limit = 1900.0;
+    double start_temp = 1000.0;
+    double end_temp = 1.0;
 };
 
 // State
@@ -119,13 +123,37 @@ void output_ans(int n, const Output& out){
 }
 
 // 乱数生成器
-std::mt19937 mt{ std::random_device{}() };
+struct RNG {
+    std::mt19937 mt;
 
-int random_number(int n)
-{
-    std::uniform_int_distribution<int> dist(0, n-1);
-    return dist(mt);
-}
+    RNG() : mt(random_device{}()) {}
+    RNG(unsigned int seed) : mt(seed) {}
+
+    // [0, n-1] の整数 (n > 0)
+    int next_int(int n) {
+        return uniform_int_distribution<int>(0, n - 1)(mt);
+    }
+
+    // [l, r] の整数 (l <= r)
+    int next_int(int l, int r) {
+        return uniform_int_distribution<int>(l, r)(mt);
+    }
+
+    // [0, 1) の実数
+    double next_double() {
+        return uniform_real_distribution<double>(0.0, 1.0)(mt);
+    }
+
+    // [l, r) の実数
+    double next_double(double l, double r) {
+        return uniform_real_distribution<double>(l, r)(mt);
+    }
+
+    // 確率 p で true
+    bool next_bool(double p) {
+        return next_double() < p;
+    }
+};
 
 // Todo: Beam Search Utility
 // Beam Search Utility
@@ -232,7 +260,7 @@ vector<Action> beam_search(
             candidates.end(),
             [](const BeamCandidate& a,
                const BeamCandidate& b) {
-                return a.score < b.score;
+                return a.score > b.score;
             }
         );
 
@@ -290,15 +318,82 @@ vector<Action> beam_search(
     return best_actions;
 }
 // Todo: Simulated Annealing Utility
+// 問題ごとに定義
+using Solution = vector<Action>;
+
+Solution make_initial_solution(const Input& input);
+
+Solution make_neighbor(
+    const Input& input,
+    const Solution& current,
+    RNG& rng
+);
+
+double evaluate_solution(
+    const Input& input,
+    const Solution& solution
+);
+
+// 共通のSA本体
+
+Solution solve_sa(const Input& input, const Parameters& params, Timer& timer, RNG& rng) {
+    Solution current = make_initial_solution(input);
+    double current_eval = evaluate_solution(input, current);
+
+    Solution best = current;
+    double best_eval = current_eval;
+
+    const double TIME_LIMIT = params.time_limit;
+
+    double elapsed = 0.0;
+    double progress = 0.0;
+    while (true) {
+        elapsed = timer.elapsed();
+        if (elapsed > TIME_LIMIT) {
+            break;
+        }
+        progress = elapsed / TIME_LIMIT;
+
+        // 温度を線形に下げる
+        double temp = params.start_temp
+            + (params.end_temp - params.start_temp) * progress;
+
+        Solution candidate = make_neighbor(input, current, rng);
+        double candidate_eval = evaluate_solution(input, candidate);
+
+        double delta = candidate_eval - current_eval;
+
+        // 改善なら採用。
+        // 改悪なら温度に応じて確率的に採用。
+        if (delta >= 0 || rng.next_double() < exp(delta / temp)) {
+            current = std::move(candidate);
+            current_eval = candidate_eval;
+        }
+
+        if (current_eval > best_eval) {
+            best = current;
+            best_eval = current_eval;
+        }
+    }
+
+    return best;
+}
+
+
 
 int main() {
 
     using namespace std;
 
     // 時間計測の開始
-    chrono::system_clock::time_point start, end;
-    start = chrono::system_clock::now();
+    // chrono::system_clock::time_point start, end;
+    // start = chrono::system_clock::now();
+
+    Timer timer;
+    timer.start_timer();
     const int TIME_LIMIT = 1900; // ms
+
+    RNG rng(12345);  // seed固定
 
     // 入力
     Input input;
@@ -322,12 +417,16 @@ int main() {
     //焼きなまし用パラメータ
     double start_temp = 50;
     double end_temp = 10;
+    
+    //Solution answer = solve_sa(input, params, timer, rng);
+
     //ここからループ予定
     int step = 0;
     while(true){
         
-        end = chrono::system_clock::now();
-        double time = static_cast<double>(chrono::duration_cast<chrono::microseconds>(end - start).count() / 1000.0);
+        // end = chrono::system_clock::now();
+        // double time = static_cast<double>(chrono::duration_cast<chrono::microseconds>(end - start).count() / 1000.0);
+        double time = timer.elapsed();
         cerr << "time: " << time << "ms" << endl;
         if(time>TIME_LIMIT){
             break;
@@ -350,7 +449,7 @@ int main() {
         break;
     }
     cerr << "step num: " << step << endl;
-
+    cout << "elapsed time: " << timer.elapsed() << " ms" << endl;
 
     //最後の出力
     //cout << endl;
